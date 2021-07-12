@@ -7,12 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-mqtt-protocol = "0.11"
-clap = "2.33.3"
+mqtt-async-client = "0.2.0"
+clap = "3.0.0-beta.2"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.2"
-chrono = { version = "0.4", features=["serde"]}
+#chrono = { version = "0.4", features=["serde"]}
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version ="0.6.3", features = ["codec"] }
 pid = { version ="3.0.0", features=["serde"]}
