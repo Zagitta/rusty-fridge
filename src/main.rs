@@ -1,7 +1,7 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{collections::HashMap, error::Error, future::Future, sync::Arc, time::Duration};
 
 use clap::{crate_version, AppSettings, Clap};
-use mqtt_async_client::client::{Client, QoS, Subscribe, SubscribeTopic};
+use mqtt_async_client::client::{Client, QoS, ReadResult, Subscribe, SubscribeTopic};
 use serde::{Deserialize, Serialize};
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
@@ -56,14 +56,47 @@ struct CLIArgs {
     username: String,
     #[clap(short, long)]
     password: String,
-    #[clap(short, long, default_value = "rusty-fridge-{}")]
-    client_id: String,
     #[clap(short, long, default_value = "rusty-fridge")]
     topic_prefix: String,
     #[clap(short, long)]
     output_topic: String,
     #[clap(short, long)]
     input_topic: String,
+}
+
+async fn subscribe<F: Fn(ReadResult)>(client: &mut Client, topic: String, callback: F) {}
+
+struct SubHandler {
+    client: Client,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    topic_map: HashMap<
+        String,
+        Vec<Box<dyn Fn(broadcast::Receiver<ReadResult>) -> dyn Future<Output = ()>>>,
+    >,
+}
+
+impl SubHandler {
+    async fn subscribe(
+        &mut self,
+        topic: String,
+        callback: impl Fn(broadcast::Receiver<ReadResult>) -> dyn Future<Output = ()>,
+    ) -> Result<(), Box<dyn Error>> {
+        let (sender, receiver) = broadcast::channel(10);
+
+        tokio::spawn(callback(receiver));
+
+        self.tasks.push(tokio::spawn(async move {}));
+        //let vec = self.topic_map.entry(topic.clone()).or_default();
+        //vec.push(Box::new(tokio::spawn(async {})));
+        self.client
+            .subscribe(Subscribe::new(vec![SubscribeTopic {
+                topic_path: topic,
+                qos: QoS::AtLeastOnce,
+            }]))
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[tokio::main]
