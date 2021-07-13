@@ -1,0 +1,60 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'rusty-fridge'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=rusty-fridge",
+                    "--package=rusty-fridge"
+                ],
+                "filter": {
+                    "name": "rusty-fridge",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "-s",
+                "home.h4cker.fun:1883",
+                "-u",
+                "hass",
+                "-p",
+                "hass",
+                "-i",
+                "zigbee2mqtt/office/air",
+                "-o",
+                "foobar",
+            ],
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated",
+            "env": {
+                "RUST_LOG": "info"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'rusty-fridge'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=rusty-fridge",
+                    "--package=rusty-fridge"
+                ],
+                "filter": {
+                    "name": "rusty-fridge",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
