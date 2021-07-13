@@ -1,9 +1,19 @@
-use std::{collections::HashMap, error::Error, future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::{
+        hash_map::Entry::{Occupied, Vacant},
+        HashMap,
+    },
+    error::Error,
+    fmt::Debug,
+    future::Future,
+    sync::Arc,
+    time::Duration,
+};
 
 use clap::{crate_version, AppSettings, Clap};
 use mqtt_async_client::client::{Client, QoS, ReadResult, Subscribe, SubscribeTopic};
 use serde::{Deserialize, Serialize};
-use tracing::{info, Level};
+use tracing::{info, instrument, trace, Level};
 use tracing_subscriber::EnvFilter;
 
 use pid::Pid;
@@ -66,34 +76,86 @@ struct CLIArgs {
 
 async fn subscribe<F: Fn(ReadResult)>(client: &mut Client, topic: String, callback: F) {}
 
+#[derive(Debug)]
 struct SubHandler {
     client: Client,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    topic_map: HashMap<
-        String,
-        Vec<Box<dyn Fn(broadcast::Receiver<ReadResult>) -> dyn Future<Output = ()>>>,
-    >,
+    topic_map: HashMap<String, broadcast::Sender<Arc<ReadResult>>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct InputMessage {
+    temperature: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum State {
+    Off,
+    On,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OutputMessage {
+    state: bool,
 }
 
 impl SubHandler {
-    async fn subscribe(
+    pub fn new(client: Client) -> SubHandler {
+        SubHandler {
+            client,
+            tasks: Default::default(),
+            topic_map: Default::default(),
+        }
+    }
+
+    #[instrument]
+    pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        loop {
+            let res = self.client.read_subscriptions().await?;
+            if let Some(sender) = self.topic_map.get(res.topic()) {
+                sender.send(Arc::new(res))?;
+            }
+        }
+    }
+
+    #[instrument]
+    pub async fn wait(&mut self) {
+        for t in &mut self.tasks {
+            let _ = tokio::join!(t);
+        }
+    }
+
+    #[instrument(skip(callback))]
+    pub async fn subscribe<FN, FU>(
         &mut self,
         topic: String,
-        callback: impl Fn(broadcast::Receiver<ReadResult>) -> dyn Future<Output = ()>,
-    ) -> Result<(), Box<dyn Error>> {
-        let (sender, receiver) = broadcast::channel(10);
+        callback: FN,
+    ) -> Result<(), Box<dyn Error>>
+    where
+        FN: Fn(broadcast::Receiver<Arc<ReadResult>>) -> FU,
+        FU: Future<Output = ()> + Send + 'static,
+    {
+        let receiver = match self.topic_map.entry(topic.clone()) {
+            Occupied(ref ent) => ent.get().subscribe(),
+            Vacant(ent) => {
+                let (sender, recevier) = broadcast::channel(10);
+                ent.insert(sender);
+                trace!(?topic, "Subscribing...");
+                let res = self
+                    .client
+                    .subscribe(Subscribe::new(vec![SubscribeTopic {
+                        topic_path: topic.clone(),
+                        qos: QoS::AtLeastOnce,
+                    }]))
+                    .await?;
+                res.any_failures()?;
+                trace!(?topic, "Done subscribing");
+                recevier
+            }
+        };
 
-        tokio::spawn(callback(receiver));
-
-        self.tasks.push(tokio::spawn(async move {}));
-        //let vec = self.topic_map.entry(topic.clone()).or_default();
-        //vec.push(Box::new(tokio::spawn(async {})));
-        self.client
-            .subscribe(Subscribe::new(vec![SubscribeTopic {
-                topic_path: topic,
-                qos: QoS::AtLeastOnce,
-            }]))
-            .await?;
+        self.tasks.push(tokio::spawn(callback(receiver)));
 
         Ok(())
     }
@@ -131,28 +193,23 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
     client.connect().await?;
     info!("connected!");
 
-    let client = RwLock::new(client);
+    let sh = RwLock::new(SubHandler::new(client));
 
-    let topic = args.input_topic.clone();
-    let t1 = tokio::spawn(async {
-        info!(?topic, "subscribing to topic");
-        let client = client;
-        let mut lock = client.write().await;
-        let subs = lock
-            .subscribe(Subscribe::new(vec![SubscribeTopic {
-                topic_path: topic,
-                qos: QoS::AtLeastOnce,
-            }]))
-            .await;
+    {
+        let topic = args.input_topic.clone();
+        sh.write()
+            .await
+            .subscribe(topic, |mut queue| async move {
+                trace!("Starting topic callback");
+                while let Ok(msg) = queue.recv().await {
+                    info!(?msg, "Got message");
+                }
+            })
+            .await?;
+    }
 
-        info!(?subs, "Subscribed!");
-        loop {
-            let foobar = lock.read_subscriptions().await.unwrap();
-            info!(?foobar, "got msg");
-        }
-    });
-
-    let res = tokio::join!(t1);
+    sh.write().await.run().await?;
+    //sh.write().await.wait().await;
 
     Ok(())
 }
