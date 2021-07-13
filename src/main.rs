@@ -11,14 +11,14 @@ use std::{
 };
 
 use clap::{crate_version, AppSettings, Clap};
-use mqtt_async_client::client::{Client, QoS, ReadResult, Subscribe, SubscribeTopic};
+use mqtt_async_client::client::{Client, Publish, QoS, ReadResult, Subscribe, SubscribeTopic};
 use serde::{Deserialize, Serialize};
-use tracing::{info, instrument, trace, Level};
+use tracing::{info, instrument, trace, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 use pid::Pid;
 use tokio::{
-    sync::{broadcast, mpsc, RwLock},
+    sync::{broadcast, mpsc, oneshot, RwLock},
     time,
 };
 
@@ -112,7 +112,9 @@ impl SubHandler {
     #[instrument]
     pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
-            let res = self.client.read_subscriptions().await?;
+            let res = self.client.read_subscriptions().await;
+            info!(?res);
+            let res = res?;
             if let Some(sender) = self.topic_map.get(res.topic()) {
                 sender.send(Arc::new(res))?;
             }
@@ -133,7 +135,7 @@ impl SubHandler {
         callback: FN,
     ) -> Result<(), Box<dyn Error>>
     where
-        FN: Fn(broadcast::Receiver<Arc<ReadResult>>) -> FU,
+        FN: FnOnce(broadcast::Receiver<Arc<ReadResult>>) -> FU,
         FU: Future<Output = ()> + Send + 'static,
     {
         let receiver = match self.topic_map.entry(topic.clone()) {
@@ -146,11 +148,11 @@ impl SubHandler {
                     .client
                     .subscribe(Subscribe::new(vec![SubscribeTopic {
                         topic_path: topic.clone(),
-                        qos: QoS::AtLeastOnce,
+                        qos: QoS::AtMostOnce,
                     }]))
                     .await?;
                 res.any_failures()?;
-                trace!(?topic, "Done subscribing");
+                info!(?topic, ?res, "Done subscribing");
                 recevier
             }
         };
@@ -163,13 +165,14 @@ impl SubHandler {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn Error>> {
-    tracing::subscriber::set_global_default(
+    /* tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_max_level(Level::TRACE)
             .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_default())
             .finish(),
-    )?;
+    )?; */
+    tracing_subscriber::fmt::init();
 
     let args = {
         let mut a = CLIArgs::parse();
@@ -182,12 +185,19 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
     let mut split = args.server.split(':');
     let host = split.next().unwrap().to_owned();
     let port = split.next().unwrap().parse()?;
+    let mut cc = rustls::ClientConfig::new();
+    cc.root_store
+        .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
 
     let mut client = Client::builder()
         .set_host(host)
         .set_port(port)
         .set_username(Some(args.username))
         .set_password(Some(args.password.as_bytes().to_vec()))
+        .set_packet_buffer_len(1024)
+        .set_automatic_connect(true)
+        //.set_client_id(Some("yikes2".into()))
+        //.set_tls_client_config(cc)
         .build()?;
 
     client.connect().await?;
@@ -200,12 +210,53 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
         sh.write()
             .await
             .subscribe(topic, |mut queue| async move {
-                trace!("Starting topic callback");
+                trace!("Starting temperature topic callback");
                 while let Ok(msg) = queue.recv().await {
-                    info!(?msg, "Got message");
+                    let res = serde_json::from_slice::<InputMessage>(msg.payload());
+                    info!(?res, "Got temp");
                 }
             })
             .await?;
+    }
+    {
+        let (s, r) = oneshot::channel();
+        let topic = format!("{}/foobar", args.topic_prefix);
+        {
+            sh.write()
+                .await
+                .subscribe(topic.clone(), |mut queue| async move {
+                    trace!("Starting controller topic callback");
+                    let first = queue.recv().await;
+                    trace!(?first, "Got first controller topic");
+                    if let Ok(msg) = first {
+                        let _ = s.send(msg);
+                    }
+                    while let Ok(msg) = queue.recv().await {
+                        info!(?msg, "Got message");
+                    }
+                    trace!("Finished controller topic callback");
+                })
+                .await?;
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let pid = match time::timeout(Duration::from_secs(5), r).await {
+            Ok(Ok(res)) => serde_json::from_slice::<Pid<f32>>(res.payload()),
+            _ => {
+                let pid = Pid::new(1.0f32, 0.0, 0.0, 100.0, 30.0, 30.0, 100.0, 20.0);
+                info!(
+                    ?topic,
+                    ?pid,
+                    "Topic is empty, populating with default value"
+                );
+                let mut po = Publish::new(topic, serde_json::to_vec(&pid)?);
+                po.set_retain(true);
+                po.set_qos(QoS::AtLeastOnce);
+                sh.write().await.client.publish(&po).await?;
+                Ok(pid)
+            }
+        }?;
     }
 
     sh.write().await.run().await?;
