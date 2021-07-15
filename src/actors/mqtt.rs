@@ -23,6 +23,7 @@ impl MqttActor {
         }
     }
 
+    #[instrument(skip(client, topic_subs))]
     async fn handle_mqtt_task(
         client: &mut Client,
         topic_subs: &mut HashMap<String, Vec<Recipient<MqttMessage>>>,
@@ -55,6 +56,8 @@ impl MqttActor {
             None => {}
         }
     }
+
+    #[instrument(skip(topic_subs))]
     async fn handle_subscription_task(
         topic_subs: &mut HashMap<String, Vec<Recipient<MqttMessage>>>,
         res: Result<ReadResult, mqtt_async_client::Error>,

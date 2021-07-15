@@ -43,6 +43,7 @@ pub struct MqttSubscribe {
     pub addr: Recipient<MqttMessage>,
 }
 
+#[derive(Debug)]
 pub enum MqttTaskActions {
     Subscribe(MqttSubscribe),
     Publish(MqttPublish),

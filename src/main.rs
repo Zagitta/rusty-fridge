@@ -16,8 +16,6 @@ use mqtt_async_client::client::{Client, KeepAlive};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, trace, warn, Level};
 
-use pid::Pid;
-
 #[derive(Debug, PartialEq, Eq, enum_utils::FromStr)]
 enum OutputMode {
     JsonOnOffState,
