@@ -51,12 +51,14 @@ impl Handler<PidOutput> for OutputActor {
     fn handle(&mut self, msg: PidOutput, _ctx: &mut Self::Context) -> Self::Result {
         debug!(?msg, "Handling pid output");
         let output = self.output_threshold < msg.0.output;
-        let changed = self.prev_output.map_or(true, |b| b == output);
+        let changed = self.prev_output.map_or(true, |b| b != output);
+        let now = Instant::now();
         let dt = self
             .prev_time
-            .map_or(Duration::from_secs(3600), |t| Instant::now() - t);
+            .map_or(Duration::from_secs(60 * 60), |t| now - t);
 
-        if changed && dt > Duration::from_secs(60 * 15) {
+        if changed && dt >= Duration::from_secs(60 * 15) {
+            info!("Setting output to: {}. Dt={:?}", output, dt);
             let _ = self.pub_addr.do_send(MqttPublish(Publish::new(
                 self.output_topic.clone(),
                 format!("{}", if output { "1" } else { "0" })
@@ -65,7 +67,7 @@ impl Handler<PidOutput> for OutputActor {
             )));
 
             self.prev_output = Some(output);
-            self.prev_time = Some(Instant::now());
+            self.prev_time = Some(now);
         }
         let _ = self.pub_addr.do_send(MqttPublish(Publish::new(
             self.state_output_topic.clone(),
