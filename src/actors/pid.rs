@@ -2,7 +2,7 @@ use crate::messages::*;
 use actix::prelude::*;
 use actix_broker::BrokerSubscribe;
 use std::time::Duration;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 type Pid = pid::Pid<f32>;
 
@@ -31,10 +31,6 @@ impl PidActor {
         if self.input.is_nan() {
             return;
         }
-
-        //info!(?self.pid, ?self.input, "pid tick, ptr={:p}", self);
-        let out = self.pid.next_control_output(self.input);
-        let _ = self.output.do_send(PidOutput(out));
     }
 }
 
@@ -43,7 +39,7 @@ impl Actor for PidActor {
     #[instrument]
     fn started(&mut self, ctx: &mut Self::Context) {
         self.subscribe_system_async::<MqttConfig>(ctx);
-        self.interval_handle = Some(ctx.run_interval(self.interval, Self::tick));
+        //self.interval_handle = Some(ctx.run_interval(self.interval, Self::tick));
     }
 }
 
@@ -52,7 +48,9 @@ impl Handler<InputTemp> for PidActor {
 
     #[instrument(skip(msg, _ctx))]
     fn handle(&mut self, msg: InputTemp, _ctx: &mut Self::Context) -> Self::Result {
-        self.input = msg.0;
+        let out = self.pid.next_control_output(msg.0);
+        info!(temp=?msg.0, ?out, "pid next");
+        let _ = self.output.do_send(PidOutput(out));
     }
 }
 
