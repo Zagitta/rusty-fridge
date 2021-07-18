@@ -1,6 +1,9 @@
 use actix::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{
+    str::from_utf8,
+    time::{Duration, Instant},
+};
 
 use mqtt_async_client::client::{
     Publish,
@@ -10,13 +13,14 @@ use mqtt_async_client::client::{
 
 use tracing::{debug, info, instrument, trace};
 
-use crate::messages::*;
+use crate::{messages::*, InputMode, OutputMode};
 
 #[derive(Debug)]
 pub struct OutputActor {
     output_topic: String,
     state_output_topic: String,
     output_threshold: f32,
+    output_mode: OutputMode,
     pub_addr: Recipient<MqttPublish>,
     prev_output: Option<bool>,
     prev_time: Option<Instant>,
@@ -27,12 +31,14 @@ impl OutputActor {
         output_topic: String,
         state_output_topic: String,
         output_threshold: f32,
+        output_mode: OutputMode,
         pub_addr: Recipient<MqttPublish>,
     ) -> Self {
         Self {
             output_topic,
             state_output_topic,
             output_threshold,
+            output_mode,
             pub_addr,
             prev_output: None,
             prev_time: None,
@@ -85,6 +91,7 @@ struct InputMessage {
 #[derive(Debug)]
 pub struct InputActor {
     input_topic: String,
+    input_mode: InputMode,
     sub_addr: Recipient<MqttSubscribe>,
     pub_addr: Recipient<InputTemp>,
 }
@@ -92,11 +99,13 @@ pub struct InputActor {
 impl InputActor {
     pub fn new(
         input_topic: String,
+        input_mode: InputMode,
         sub_addr: Recipient<MqttSubscribe>,
         pub_addr: Recipient<InputTemp>,
     ) -> Self {
         Self {
             input_topic,
+            input_mode,
             sub_addr,
             pub_addr,
         }
@@ -127,9 +136,19 @@ impl Handler<MqttMessage> for InputActor {
     #[instrument(skip(self, msg, _ctx))]
     fn handle(&mut self, msg: MqttMessage, _ctx: &mut Self::Context) -> Self::Result {
         trace!("Handling mqtt message");
-        if let Ok(msg) = serde_json::from_slice::<InputMessage>(msg.0.payload()) {
+        let temp = match self.input_mode {
+            InputMode::Raw => from_utf8(msg.0.payload()).map_or(None, |s| {
+                //skip the first char if it's a quoted string
+                let s = if s.starts_with('"') { &s[1..] } else { s };
+                s.parse::<f32>().ok()
+            }),
+            InputMode::Json => serde_json::from_slice::<InputMessage>(msg.0.payload())
+                .map(|im| im.temperature)
+                .ok(),
+        };
+        if let Some(temp) = temp {
             info!(?msg, "Received tempereature msg");
-            let _ = self.pub_addr.do_send(InputTemp(msg.temperature));
+            let _ = self.pub_addr.do_send(InputTemp(temp));
         }
     }
 }

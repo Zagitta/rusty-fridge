@@ -9,7 +9,12 @@ use actors::{
     mqtt::MqttActor,
     pid::PidActor,
 };
-use std::{error::Error, fmt::Debug, time::Duration};
+use std::{
+    error::Error,
+    fmt::Debug,
+    str::{self, FromStr},
+    time::Duration,
+};
 
 use clap::{crate_version, AppSettings, Clap};
 use mqtt_async_client::client::{Client, KeepAlive};
@@ -17,11 +22,17 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument, trace, warn, Level};
 
 #[derive(Debug, PartialEq, Eq, enum_utils::FromStr)]
-enum OutputMode {
+pub enum OutputMode {
     JsonOnOffState,
     JsonBooleanState,
     Integer,
     Boolean,
+}
+
+#[derive(Debug, PartialEq, Eq, enum_utils::FromStr)]
+pub enum InputMode {
+    Raw,
+    Json,
 }
 
 #[derive(Clap)]
@@ -46,6 +57,10 @@ struct CLIArgs {
     topic_prefix: String,
     #[clap(long, default_value = "0")]
     instance_name: String,
+    #[clap(long, default_value = "Json")]
+    input_mode: String,
+    #[clap(long, default_value = "JsonOnOffState")]
+    output_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,6 +116,7 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
         args.output_topic,
         format!("{}/debug", base_name),
         70.0,
+        OutputMode::from_str(&args.output_mode).unwrap(),
         mqtt.clone().recipient(),
     )
     .start();
@@ -109,8 +125,13 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
 
     let pid = PidActor::new(output.recipient(), Duration::from_secs(60)).start();
 
-    let _input =
-        InputActor::new(args.input_topic, mqtt.clone().recipient(), pid.recipient()).start();
+    let _input = InputActor::new(
+        args.input_topic,
+        InputMode::from_str(&args.input_mode).unwrap(),
+        mqtt.clone().recipient(),
+        pid.recipient(),
+    )
+    .start();
 
     let _config = ConfigActor::new(
         format!("{}/config", base_name),
