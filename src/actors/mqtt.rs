@@ -46,12 +46,12 @@ impl MqttActor {
                 }
             }
             Some(MqttTaskActions::Publish(msg)) => {
-                debug!(
+                info!(
                     "Publishing mqtt message: {:?}",
                     std::str::from_utf8(msg.0.payload())
                 );
                 let res = client.publish(&msg.0).await;
-                debug!(?res, "Published");
+                info!(?res, "Published");
             }
             None => {}
         }

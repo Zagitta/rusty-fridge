@@ -27,6 +27,7 @@ pub enum OutputMode {
     JsonBooleanState,
     Integer,
     Boolean,
+    OnOff,
 }
 
 #[derive(Debug, PartialEq, Eq, enum_utils::FromStr)]
@@ -61,6 +62,9 @@ struct CLIArgs {
     input_mode: String,
     #[clap(long, default_value = "JsonOnOffState")]
     output_mode: String,
+
+    #[clap(short, long)]
+    brew_father: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,8 +124,6 @@ async fn main() -> std::result::Result<(), Box<dyn Error>> {
         mqtt.clone().recipient(),
     )
     .start();
-    /* output_topic: "ESPRUNA/server-relay/relay/0/set".into(),
-    state_output_topic: "rusty-fridge/debug".into(), */
 
     let pid = PidActor::new(output.recipient(), Duration::from_secs(60)).start();
 

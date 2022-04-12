@@ -67,9 +67,33 @@ impl Handler<PidOutput> for OutputActor {
             info!("Setting output to: {}. Dt={:?}", output, dt);
             let _ = self.pub_addr.do_send(MqttPublish(Publish::new(
                 self.output_topic.clone(),
-                format!("{}", if output { "1" } else { "0" })
-                    .as_bytes()
-                    .to_vec(),
+                match self.output_mode {
+                    OutputMode::JsonOnOffState => {
+                        if output {
+                            r#"{"state": "ON"}"#
+                        } else {
+                            r#"{"state": "OFF"}"#
+                        }
+                    }
+                    OutputMode::JsonBooleanState => todo!(),
+                    OutputMode::Integer => {
+                        if output {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                    }
+                    OutputMode::Boolean => todo!(),
+                    OutputMode::OnOff => {
+                        if output {
+                            "ON"
+                        } else {
+                            "OFF"
+                        }
+                    }
+                }
+                .as_bytes()
+                .to_vec(),
             )));
 
             self.prev_output = Some(output);
@@ -115,7 +139,7 @@ impl InputActor {
 impl Actor for InputActor {
     type Context = Context<Self>;
 
-    #[instrument]
+    #[instrument(skip(ctx))]
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("Started input actor");
         let _req = self.sub_addr.do_send(MqttSubscribe {
